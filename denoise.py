@@ -231,7 +231,7 @@ def collect_inputs(inp, out_dir):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="denoise.py",
-        description="Denoise PNG/JPEG images fully locally with classical filters (no AI, no network).",
+        description="Denoise photos and 3D renders fully locally with classical filters (no AI, no network).",
         epilog="examples:\n"
                "  python denoise.py photo.png\n"
                "  python denoise.py photos/ -o clean/ -m nlm -s 12 -j 4\n"
