@@ -54,6 +54,32 @@ def denoise_image(img, method, strength):
     return denoise_core(img, method, strength)
 
 
+def edge_weight(gray, thresh=0.60):
+    smooth = cv2.GaussianBlur(gray, (9, 9), 0)
+    gx = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+    scale = float(np.percentile(mag, 98))
+    if scale <= 0:
+        scale = 1.0
+    g = np.clip(mag / scale, 0.0, 1.0)
+    w = (g > thresh).astype(np.float32)
+    return cv2.GaussianBlur(w, (3, 3), 0)
+
+
+def apply_edge_keep(orig, den, amount):
+    orig = to_uint8(orig)
+    if orig.ndim == 3 and orig.shape[2] == 4:
+        w = edge_weight(cv2.cvtColor(orig[:, :, :3], cv2.COLOR_BGR2GRAY))[:, :, None]
+        blended = np.rint(den[:, :, :3].astype(np.float32) * (1.0 - amount * w) + orig[:, :, :3].astype(np.float32) * (amount * w)).astype(np.uint8)
+        return np.dstack((blended, orig[:, :, 3]))
+    if orig.ndim == 3:
+        w = edge_weight(cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY))[:, :, None]
+    else:
+        w = edge_weight(orig)
+    return np.rint(den.astype(np.float32) * (1.0 - amount * w) + orig.astype(np.float32) * (amount * w)).astype(np.uint8)
+
+
 def make_preview(before, after):
     def prep(im):
         im = to_uint8(im)
@@ -73,12 +99,14 @@ def make_preview(before, after):
     return cv2.hconcat([a, gap, b])
 
 
-def process_file(src, dst, method, strength, fmt, quality, preview):
+def process_file(src, dst, method, strength, fmt, quality, preview, edge_keep):
     src, dst = Path(src), Path(dst)
     raw = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
     if raw is None:
         raise ValueError("unreadable or unsupported image")
     out = denoise_image(raw, method, strength)
+    if edge_keep > 0:
+        out = apply_edge_keep(raw, out, min(1.0, max(0.0, edge_keep)))
     ext = ("." + fmt) if fmt else src.suffix.lower()
     if ext not in (".png", ".jpg", ".jpeg"):
         ext = ".png"
@@ -100,10 +128,10 @@ def process_file(src, dst, method, strength, fmt, quality, preview):
 
 
 def _worker(job):
-    src, dst, method, strength, fmt, quality, preview = job
+    src, dst, method, strength, fmt, quality, preview, edge_keep = job
     t0 = time.perf_counter()
     try:
-        target = process_file(src, dst, method, strength, fmt, quality, preview)
+        target = process_file(src, dst, method, strength, fmt, quality, preview, edge_keep)
         return str(src), str(target), time.perf_counter() - t0, None
     except Exception as exc:
         return str(src), None, time.perf_counter() - t0, str(exc)
@@ -126,7 +154,8 @@ def main(argv=None):
         epilog="examples:\n"
                "  python denoise.py photo.png\n"
                "  python denoise.py photos/ -o clean/ -m nlm -s 12 -j 4\n"
-               "  python denoise.py noisy.png -m median -s 10 --format png --preview\n",
+               "  python denoise.py noisy.png -m median -s 10 --format png --preview\n"
+               "  python denoise.py photo.png -m nlm -s 12 --edge-keep 0.8\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("input", help="image file or directory (searched recursively for .png/.jpg/.jpeg)")
@@ -142,6 +171,9 @@ def main(argv=None):
     ap.add_argument("--quality", type=int, default=95, help="JPEG quality 1-100 (default 95)")
     ap.add_argument("-j", "--jobs", type=int, default=1, help="parallel workers for batch mode (default 1)")
     ap.add_argument("--preview", action="store_true", help="also write a side-by-side <name>_compare.png")
+    ap.add_argument("--edge-keep", type=float, default=0.0, metavar="0-1",
+                    help="blend edges detected in the original image back into the denoised result so edges stay "
+                         "sharp (0=off, 1=keep original pixels at strong edges; default 0, try 0.6-0.9)")
     args = ap.parse_args(argv)
 
     inp = Path(args.input)
@@ -162,10 +194,10 @@ def main(argv=None):
     jobs = []
     for f in files:
         rel = f.relative_to(inp) if inp.is_dir() else Path(f.name)
-        jobs.append((f, out_dir / rel, args.method, args.strength, args.format, args.quality, args.preview))
+        jobs.append((f, out_dir / rel, args.method, args.strength, args.format, args.quality, args.preview, args.edge_keep))
 
     total = len(jobs)
-    print(f"denoising {total} image(s) | method={args.method} strength={args.strength} -> {out_dir}")
+    print(f"denoising {total} image(s) | method={args.method} strength={args.strength} edge-keep={args.edge_keep} -> {out_dir}")
     if args.jobs > 1 and total > 1:
         import multiprocessing as mp
         with mp.Pool(min(args.jobs, total)) as pool:

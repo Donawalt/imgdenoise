@@ -78,7 +78,7 @@ def main():
         assert (out_sp / "noisy_sp_compare.png").exists(), "preview missing"
 
         out_batch = td / "out_batch"
-        run(batch, "-o", out_batch, "-m", "nlm", "-s", "12", "-j", "2")
+        run(batch, "-o", out_batch, "-m", "nlm", "-s", "12", "-j", "2", "--edge-keep", "0.8")
         assert (out_batch / "a.png").exists()
         assert (out_batch / "b.jpg").exists()
         den_a = cv2.imread(str(out_batch / "a.png"), cv2.IMREAD_UNCHANGED)
@@ -97,6 +97,26 @@ def main():
         assert (out_bil / "noisy.png").exists() and (out_gau / "noisy.png").exists()
         print(f"bilateral: {psnr(noisy_g, clean):.2f} -> {psnr(cv2.imread(str(out_bil / 'noisy.png')), clean):.2f} dB")
         print(f"gaussian:  {psnr(noisy_g, clean):.2f} -> {psnr(cv2.imread(str(out_gau / 'noisy.png')), clean):.2f} dB")
+
+        out_ek = td / "out_ek"
+        run(td / "noisy.png", "-o", out_ek, "-m", "gaussian", "-s", "10", "--edge-keep", "0.9")
+        den_g = cv2.imread(str(out_gau / "noisy.png"), cv2.IMREAD_UNCHANGED)
+        den_ek = cv2.imread(str(out_ek / "noisy.png"), cv2.IMREAD_UNCHANGED)
+
+        def grad_mag(img):
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            return cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))
+
+        grad_clean = grad_mag(clean)
+        edge_band = grad_clean > np.percentile(grad_clean, 90)
+        flat = ~cv2.dilate(edge_band.astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool)
+        err_g = float(np.mean(np.abs(grad_mag(den_g) - grad_clean)[edge_band]))
+        err_ek = float(np.mean(np.abs(grad_mag(den_ek) - grad_clean)[edge_band]))
+        mse_g = float(np.mean((den_g.astype(np.float64) - clean.astype(np.float64))[flat] ** 2))
+        mse_ek = float(np.mean((den_ek.astype(np.float64) - clean.astype(np.float64))[flat] ** 2))
+        print(f"edge-keep: edge gradient error gaussian={err_g:.1f} -> edge-keep={err_ek:.1f}; flat MSE {mse_g:.1f} -> {mse_ek:.1f}")
+        assert err_ek < err_g, "edge-keep did not keep edges sharper"
+        assert mse_ek <= mse_g * 1.05 + 1e-6, "edge-keep degraded flat areas"
 
         out_jpg = td / "out_jpg"
         run(td / "noisy.png", "-o", out_jpg, "--format", "jpg", "--quality", "90")

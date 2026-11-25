@@ -22,6 +22,9 @@ python denoise.py photos/ -o clean/ -m nlm -s 14 -j 4
 # salt-and-pepper noise -> median filter, plus a side-by-side preview
 python denoise.py noisy.png -m median -s 10 --preview
 
+# keep edges razor-sharp: blend edges from the original back into the denoised image
+python denoise.py photo.png -m nlm -s 12 --edge-keep 0.8
+
 # force JPEG output at quality 90
 python denoise.py scan.png -o out/ --format jpg --quality 90
 ```
@@ -46,6 +49,9 @@ Higher `-s` = stronger denoising (more blur). Start at 10–15 for typical photo
 - Output format defaults to each input's format; `--format` forces one format for all.
 - Default output directory is `<input>_denoised` next to the input; `-o` overrides it. Directory structure is preserved.
 - `--preview` writes `<name>_compare.png` (before | after) next to each output.
+- `--edge-keep 0-1` detects edges in the original image (Sobel gradient, adaptive threshold) and blends the
+  original pixels back in at strong edges, so edges stay sharp/"net" while flat areas are fully denoised.
+  `0` = off (default), `1` = keep original pixels at edges. Try `0.6-0.9`; works with every method and keeps alpha intact.
 
 ## Test
 
