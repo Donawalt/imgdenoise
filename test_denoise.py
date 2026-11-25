@@ -118,6 +118,56 @@ def main():
         assert err_ek < err_g, "edge-keep did not keep edges sharper"
         assert mse_ek <= mse_g * 1.05 + 1e-6, "edge-keep degraded flat areas"
 
+        out_w = td / "out_w"
+        run(td / "noisy.png", "-o", out_w, "-m", "wavelet", "-s", "12")
+        den_w = cv2.imread(str(out_w / "noisy.png"), cv2.IMREAD_UNCHANGED)
+        print(f"wavelet: PSNR noisy={psnr(noisy_g, clean):.2f} dB -> denoised={psnr(den_w, clean):.2f} dB")
+        assert psnr(den_w, clean) > psnr(noisy_g, clean) + 2, "wavelet did not improve PSNR"
+
+        rng2 = np.random.default_rng(7)
+        noisy_ff = np.clip(clean.astype(np.float32) + rng2.normal(0, 8, clean.shape), 0, 255).astype(np.uint8)
+        mf = rng2.random(noisy_ff.shape[:2]) < 0.005
+        noisy_ff[mf] = 255
+        md = rng2.random(noisy_ff.shape[:2]) < 0.002
+        noisy_ff[md] = 0
+        cv2.imwrite(str(td / "render.png"), noisy_ff)
+        out_ff0 = td / "out_ff0"
+        run(td / "render.png", "-o", out_ff0, "-m", "nlm", "-s", "12")
+        out_ff = td / "out_ff"
+        run(td / "render.png", "-o", out_ff, "-m", "nlm", "-s", "12", "--fireflies", "80")
+        p0 = psnr(cv2.imread(str(out_ff0 / "render.png")), clean)
+        p1 = psnr(cv2.imread(str(out_ff / "render.png")), clean)
+        print(f"fireflies: nlm PSNR {p0:.2f} -> with --fireflies {p1:.2f} dB (noisy {psnr(noisy_ff, clean):.2f})")
+        assert p1 > p0 + 0.3, "firefly pre-pass did not help"
+
+        out_sh = td / "out_sh"
+        run(td / "noisy.png", "-o", out_sh, "-m", "gaussian", "-s", "10", "--sharpen", "0.35")
+        den_sh = cv2.imread(str(out_sh / "noisy.png"), cv2.IMREAD_UNCHANGED)
+        err_sh = float(np.mean(np.abs(grad_mag(den_sh) - grad_clean)[edge_band]))
+        mse_sh = float(np.mean((den_sh.astype(np.float64) - clean.astype(np.float64))[flat] ** 2))
+        print(f"sharpen: edge gradient error gaussian={err_g:.1f} -> +sharpen={err_sh:.1f}; flat MSE {mse_g:.1f} -> {mse_sh:.1f}")
+        assert err_sh < err_g * 0.9, "sharpen did not restore edge contrast"
+        assert mse_sh <= mse_g * 1.10 + 1e-6, "sharpen leaked into flat areas"
+
+        gray_img = np.full((80, 80, 3), 128, np.uint8)
+        cv2.imwrite(str(td / "gray.png"), gray_img)
+        out_gray = td / "out_gray"
+        run(td / "gray.png", "-o", out_gray, "-m", "gaussian", "-s", "10", "--sharpen", "0.5")
+        g_out = cv2.imread(str(out_gray / "gray.png"), cv2.IMREAD_UNCHANGED)
+        assert np.array_equal(g_out, gray_img), "luminance-only sharpen changed flat gray"
+        print("luminance-only sharpen ok (flat gray bit-identical)")
+
+        out_pr = td / "out_pr"
+        run(td / "render.png", "-o", out_pr, "--preset", "render")
+        p_pr = psnr(cv2.imread(str(out_pr / "render.png")), clean)
+        print(f"preset render: PSNR {psnr(noisy_ff, clean):.2f} -> {p_pr:.2f} dB")
+        assert p_pr > psnr(noisy_ff, clean) + 2, "render preset did not improve PSNR"
+        out_pp = td / "out_pp"
+        run(td / "noisy.png", "-o", out_pp, "--preset", "photo")
+        p_pp = psnr(cv2.imread(str(out_pp / "noisy.png")), clean)
+        print(f"preset photo: PSNR {psnr(noisy_g, clean):.2f} -> {p_pp:.2f} dB")
+        assert p_pp > psnr(noisy_g, clean) + 2, "photo preset did not improve PSNR"
+
         out_jpg = td / "out_jpg"
         run(td / "noisy.png", "-o", out_jpg, "--format", "jpg", "--quality", "90")
         j = cv2.imread(str(out_jpg / "noisy.jpg"), cv2.IMREAD_UNCHANGED)
